@@ -39,7 +39,7 @@ plot(era5_regridded[[1]])
 print(access_regridded)
 print(era5_regridded)
 
-##### SPI #####
+##### ERA5 SPI #####
 
 
 raster_data <- rast("C:/Users/marta/OneDrive/Documenti/UNI/Climate change seminar/ERA5_1950-1990_regridded.nc")
@@ -72,7 +72,50 @@ print(spi_era5)
 
 plot(spi_era5[[20]])
 
-########################### access
+
+##### ERA5 PCA VARIMAX #####
+# Note: The spi_12_matrix currently has dimensions: (ncell, 492),
+# meaning each row is a spatial cell and each column is a time lag.
+# For PCA analogous to the Python script (observations = time steps),
+# we need to transpose the matrix so that rows represent time and columns represent spatial cells.
+spi_data <- t(spi_12_matrix)  # New dimensions: 492 (time steps) x ncell (spatial cells)
+
+# Remove rows with any NA values
+spi_data_clean <- spi_data[complete.cases(spi_data), ]
+
+# Check dimensions after removal
+dim(spi_data_clean)
+
+
+# Now perform PCA on the cleaned data
+pca_res <- prcomp(spi_data_clean, center = TRUE, scale. = FALSE)
+
+# Set the maximum number of components to retain (we took 60 components)
+max_comps <- min(60, ncol(pca_res$rotation))
+pca_loadings <- pca_res$rotation[, 1:max_comps, drop = FALSE]  # Spatial loadings (ncell x max_comps)
+pca_scores   <- pca_res$x[, 1:max_comps, drop = FALSE]           # Temporal scores (time steps x max_comps)
+
+# Apply Varimax rotation on the PCA loadings.
+varimax_res <- varimax(pca_loadings)
+rotated_loadings <- varimax_res$loadings             # Rotated loadings (ncell x max_comps)
+rotated_scores   <- pca_scores %*% varimax_res$rotmat   # Rotated time series (time steps x max_comps)
+
+# Calculate the variance of each rotated component and the fraction of total variance explained.
+rotated_variance <- apply(rotated_scores, 2, var)
+total_variance <- sum(pca_res$sdev[1:max_comps]^2)
+rotated_explained <- rotated_variance / total_variance
+
+# For each rotated component, find the cell with the maximum absolute loading.
+coords <- xyFromCell(raster_data, 1:ncell(raster_data))
+max_idx <- apply(abs(rotated_loadings), 2, which.max)
+max_coords <- coords[max_idx, ]
+
+# Print summary results.
+print("Explained variance of rotated components:")
+print(rotated_explained)
+print("Coordinates of maximum absolute loadings for each component:")
+print(max_coords)
+##### ACCESS SPI #######
 
 raster_data <- rast("C:/Users/marta/OneDrive/Documenti/UNI/Climate change seminar/ACCESS-ESM1-5_1950-1990_regridded.nc")
 
@@ -104,36 +147,50 @@ print(spi_access)
 
 plot(spi_access[[30]])
 
-######## change data structure for fitting python ##########
+
+##### ACCESS PCA VARIMAX ######
+##### PCA, SVD and Varimax Rotation #####
+
+# Note: The spi_12_matrix currently has dimensions: (ncell, 492),
+# meaning each row is a spatial cell and each column is a time lag.
+# For PCA analogous to the Python script (observations = time steps),
+# we need to transpose the matrix so that rows represent time and columns represent spatial cells.
+spi_data <- t(spi_12_matrix)  # New dimensions: 492 (time steps) x ncell (spatial cells)
+
+# Remove rows with any NA values
+spi_data_clean <- spi_data[complete.cases(spi_data), ]
+
+# Check dimensions after removal
+dim(spi_data_clean)
 
 
-#### ERA DATA ####
+# Now perform PCA on the cleaned data
+pca_res <- prcomp(spi_data_clean, center = TRUE, scale. = FALSE)
 
-# Load the original NetCDF file
-raster_data <- rast("C:/Users/marta/OneDrive/Documenti/UNI/Climate change seminar/ERA5_1950-1990_regridded.nc")
+# Set the maximum number of components to retain (we took 60 components)
+max_comps <- min(60, ncol(pca_res$rotation))
+pca_loadings <- pca_res$rotation[, 1:max_comps, drop = FALSE]  # Spatial loadings (ncell x max_comps)
+pca_scores   <- pca_res$x[, 1:max_comps, drop = FALSE]           # Temporal scores (time steps x max_comps)
 
-# Get raster dimensions
-n_cells <- ncell(raster_data)  # Number of spatial locations
-n_time <- 492  # Assuming monthly data from 1950 to 1990
+# Apply Varimax rotation on the PCA loadings.
+varimax_res <- varimax(pca_loadings)
+rotated_loadings <- varimax_res$loadings             # Rotated loadings (ncell x max_comps)
+rotated_scores   <- pca_scores %*% varimax_res$rotmat   # Rotated time series (time steps x max_comps)
 
-# Initialize an empty matrix (T, N) for PCMCI
-spi_12_matrix <- matrix(NA, nrow = n_time, ncol = n_cells)
+# Calculate the variance of each rotated component and the fraction of total variance explained.
+rotated_variance <- apply(rotated_scores, 2, var)
+total_variance <- sum(pca_res$sdev[1:max_comps]^2)
+rotated_explained <- rotated_variance / total_variance
 
-# Compute SPI-12 for each cell
-for (i in 1:n_cells) {
-  cell_values <- extract(raster_data, i)  # Extract time series for cell
-  
-  spi_12_result <- spi(as.numeric(cell_values), scale = 12, 
-                       distribution = "Gamma", fit = "ub-pwm", 
-                       na.rm = TRUE, verbose = FALSE)
-  
-  spi_12_matrix[, i] <- spi_12_result$fitted  # Store result in (T, N) format
-}
+# For each rotated component, find the cell with the maximum absolute loading.
+coords <- xyFromCell(raster_data, 1:ncell(raster_data))
+max_idx <- apply(abs(rotated_loadings), 2, which.max)
+max_coords <- coords[max_idx, ]
 
-plot(spi_12_result)
-# Convert matrix to a DataTable (efficient format)
-spi_12_dt <- as.data.table(spi_12_matrix)
+# Print summary results.
+print("Explained variance of rotated components:")
+print(rotated_explained)
+print("Coordinates of maximum absolute loadings for each component:")
+print(max_coords)
 
-# Save as CSV (easiest format for Python)
-write.csv(spi_12_dt, "C:/Users/marta/OneDrive/Documenti/UNI/Climate change seminar/processed_spi12.csv", row.names = FALSE)
 
