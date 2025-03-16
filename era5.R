@@ -2,10 +2,14 @@ library(terra)
 library(SPEI)
 library(data.table)
 library(arrow)
+library(maps)
+library(ggplot2)
+library(ggrepel)
+library(cowplot)
 
 ##### DATA ####
-era5 <- rast("1950_1990_monthly_mm.nc")
-access <- rast("pr_monthly_sums_ACCESS-ESM1-5_1950-1990.nc")
+era5 <- rast("C:/Users/marta/OneDrive/Documenti/UNI/Climate change seminar/ERA5/1950_1990_monthly_mm.nc")
+
 
 common_extent <- ext(
   max(c(ext(era5)[1], ext(access)[1])),   
@@ -18,18 +22,15 @@ target_res <- rast(common_extent, resolution = c(2, 2))
 print(target_res)
 
 era5_regridded <- resample(era5, target_res, method = "bilinear")
-access_regridded <- resample(access, target_res, method = "bilinear")
 
-writeCDF(access_regridded, "C:/Users/marta/OneDrive/Documenti/UNI/Climate change seminar/ACCESS-ESM1-5_1950-1990_regridded.nc", overwrite = TRUE)
-writeCDF(era5_regridded, "C:/Users/marta/OneDrive/Documenti/UNI/Climate change seminar/ERA5_1950-1990_regridded.nc", overwrite = TRUE)
 
-plot(access_regridded[[1]])
+writeCDF(era5_regridded, "C:/Users/marta/OneDrive/Documenti/UNI/Climate change seminar/ERA5/ERA5_1950-1990_regridded.nc", overwrite = TRUE)
+
 plot(era5_regridded[[1]])
-print(access_regridded)
 print(era5_regridded)
 
 ##### SPI #####
-raster_data <- rast("C:/Users/marta/OneDrive/Documenti/UNI/Climate change seminar/ERA5_1950-1990_regridded.nc")
+raster_data <- rast("C:/Users/marta/OneDrive/Documenti/UNI/Climate change seminar/ERA5/ERA5_1950-1990_regridded.nc")
 spi_12_matrix <- matrix(NA, nrow = ncell(raster_data), ncol = 492)
 
 for (i in 1:ncell(raster_data)) {
@@ -47,13 +48,17 @@ values(spi_raster) <- spi_12_matrix
 
 print(spi_12_matrix)
 plot(spi_12_result)
-writeCDF(spi_raster, "C:/Users/marta/OneDrive/Documenti/UNI/Climate change seminar/SPI12_ERA5_1950-1990.nc", 
+writeCDF(spi_raster, "C:/Users/marta/OneDrive/Documenti/UNI/Climate change seminar/ERA5/SPI12_ERA5_1950-1990.nc", 
          overwrite = TRUE, varname = "spi12", 
          longname = "SPI-12", zname = "time")
-spi_era5 <- rast("C:/Users/marta/OneDrive/Documenti/UNI/Climate change seminar/SPI12_ERA5_1950-1990.nc")
+spi_era5 <- rast("C:/Users/marta/OneDrive/Documenti/UNI/Climate change seminar/ERA5/SPI12_ERA5_1950-1990.nc")
 print(spi_era5)
 
 plot(spi_era5[[20]])
+# Save SPI raster plot
+png(file.path("C:/Users/marta/OneDrive/Documenti/UNI/Climate change seminar/ERA5", "spi_era5_plot.png"), width = 800, height = 600)
+plot(spi_era5[[20]], main = "SPI-12 ERA5 (Time Step 20)")
+dev.off()
 ##### PCA, SVD and Varimax Rotation #####
 
 # Note: The spi_12_matrix currently has dimensions: (ncell, 492),
@@ -73,7 +78,7 @@ dim(spi_data_clean)
 pca_res <- prcomp(spi_data_clean, center = TRUE, scale. = FALSE)
 
 # Set the maximum number of components to retain (we took 60 components)
-max_comps <- min(60, ncol(pca_res$rotation))
+max_comps <- min(100, ncol(pca_res$rotation))
 pca_loadings <- pca_res$rotation[, 1:max_comps, drop = FALSE]  # Spatial loadings (ncell x max_comps)
 pca_scores   <- pca_res$x[, 1:max_comps, drop = FALSE]           # Temporal scores (time steps x max_comps)
 
@@ -116,13 +121,10 @@ subset_data <- as.data.frame(subset_rotated_scores)
 subset_data$time <- seq_len(nrow(subset_data))
 
 # Write the data to a CSV file.
-write.csv(subset_data, "ERA5_subset_rotated_scores.csv", row.names = FALSE)
+write.csv(subset_data, "C:/Users/marta/OneDrive/Documenti/UNI/Climate change seminar/ERA5/ERA5_subset_rotated_scores.csv", row.names = FALSE)
 
 
 
-
-
-########## visualisations ###########
 
 
 ####### BARPLOT ######
@@ -131,78 +133,113 @@ barplot(rotated_explained * 100,
         names.arg = 1:length(rotated_explained),
         xlab = "Rotated Component", ylab = "Variance Explained (%)", 
         main = "Scree Plot of Rotated Components", col = "lightblue")
+png(file.path("C:/Users/marta/OneDrive/Documenti/UNI/Climate change seminar/ERA5", "rotated_components_barplot.png"), width = 800, height = 600)
+barplot(rotated_explained * 100, 
+        names.arg = 1:length(rotated_explained),
+        xlab = "Rotated Component", ylab = "Variance Explained (%)", 
+        main = "Scree Plot of Rotated Components", col = "lightblue")
+dev.off()
 
 
-####### DOES NOT WORK YET ######
-# Install required packages if not already installed:
-#install.packages(c("leaflet", "terra", "raster", "viridisLite"))
 
-library(leaflet)
-library(terra)
-library(raster)  # For conversion compatibility with leaflet
-library(viridisLite)
+####### FIRST COMPONENTS MAP ######
+# For each cell (row), find the index of the component with the largest absolute loading
+component_assignments <- apply(rotated_loadings, 1, function(x) which.max(abs(x)))
 
-# Select the component to visualize (e.g., first component)
-component_index <- 1
+# Create a new SpatRaster with these integer assignments
+assign_raster <- raster_data
+values(assign_raster) <- component_assignments
+assign_raster <- rotate(assign_raster)
 
-# Create a raster for the selected component using your template raster
-# Assuming 'raster_data' is a SpatRaster from terra and rotated_loadings is a matrix
-component_raster <- raster_data  # Using your existing terra object
-terra::values(component_raster) <- rotated_loadings[, component_index]
 
-print(raster_data)
 
-# (Optional) If your data are not in EPSG:4326 (WGS84), you should transform them.
-# For example, if they are in another CRS:
-# component_raster <- project(component_raster, "EPSG:4326")
+# Convert the SpatRaster to a data frame
+df_assign <- as.data.frame(assign_raster, xy = TRUE)
+# The default column name for the raster values might be something like "layer"
+# Rename it to "component"
+names(df_assign)[3] <- "component"
 
-# Convert terra raster to a raster object from the 'raster' package for compatibility with leaflet.
-component_raster_sp <- raster(component_raster)
 
-# Create a color palette based on the raster values.
-pal <- colorNumeric(palette = viridis(100), domain = values(component_raster_sp), na.color = "transparent")
+# 1) Convert 'component' to numeric instead of factor
+df_assign$component <- as.numeric(df_assign$component)
 
-# Create the interactive map.
-leaflet() %>%
-  addTiles() %>%  # Base map layer
-  addRasterImage(component_raster_sp, colors = pal, opacity = 0.7) %>%
-  addLegend(pal = pal, values = values(component_raster_sp), title = paste("Component", component_index, "Loadings")) %>%
-  # Overlay a marker at the maximum absolute loading point for the selected component.
-  addMarkers(
-    lng = max_coords[component_index, "x"],
-    lat = max_coords[component_index, "y"],
-    popup = paste("Max loading for Component", component_index)
+# 2) Plot with a continuous viridis color scale
+area_components_map <- ggplot() +
+  geom_raster(data = df_assign, aes(x = x, y = y, fill = component)) +
+  geom_path(data = world, aes(x = long, y = lat, group = group), 
+            color = "black", size = 0.2) +
+  scale_fill_viridis_c(
+    name = "Component",
+    # Optional: set limits & breaks if desired
+    # limits = c(1, max(df_assign$component)), 
+    # breaks = 1:max(df_assign$component),
+    guide = guide_colorbar(barwidth = 1, barheight = 10)
+  ) +
+  coord_fixed(xlim = c(-180, 180), ylim = c(-90, 90), expand = FALSE) +
+  theme_minimal() +
+  labs(
+    title = "Dominant Rotated Component by Cell",
+    x = "Longitude", 
+    y = "Latitude"
   )
+ggsave(file.path("C:/Users/marta/OneDrive/Documenti/UNI/Climate change seminar/ERA5", "area_dominant_components_map.png"), area_components_map, width = 10, height = 6)
 
+####### SECOND COMPONENTS MAP #########
 
-########## PLOTLY ######### (WORKS)
-# Install plotly if needed:
-#install.packages("plotly")
+# max_idx[i] = the cell index with the largest absolute loading for component i
+max_idx <- apply(abs(rotated_loadings), 2, which.max)
+coords <- xyFromCell(raster_data, 1:ncell(raster_data))
+max_coords <- coords[max_idx, ]  # lat/lon for each component
 
-library(plotly)
-library(ggplot2)
-# Create a data frame containing time (e.g., time steps) and rotated scores for two components.
-time <- 1:nrow(rotated_scores)  # Assuming rows correspond to time steps
-data_ts <- data.frame(
-  Time = time,
-  Component1 = rotated_scores[, 1],
-  Component2 = rotated_scores[, 2]
+# for nicer text labels
+# Shift negative longitudes from [-180, 0) to [180, 360)
+df_nodes$x_360 <- ifelse(df_nodes$x < 0, df_nodes$x + 360, df_nodes$x)
+components_map <-ggplot() +
+  geom_polygon(data = world_360, 
+               aes(x = long_360, y = lat, group = group),
+               fill = "white", color = "black", size = 0.2) +
+  geom_point(data = df_nodes, 
+             aes(x = x_360, y = y),
+             color = "red", size = 3) +
+  geom_text_repel(data = df_nodes, 
+                  aes(x = x_360, y = y, label = component),
+                  color = "black", size = 4) +
+  coord_fixed(xlim = c(0, 360), ylim = c(-90, 90)) +
+  theme_minimal() +
+  labs(title = "Primary Node for Each Rotated Component (0–360)",
+       x = "Longitude (0–360)", y = "Latitude")
+ggsave(file.path("C:/Users/marta/OneDrive/Documenti/UNI/Climate change seminar/ERA5", "dominant_components_map.png"), components_map, width = 10, height = 6)
+
+######## Time series ########
+time <- seq_len(nrow(rotated_scores))  # each row in rotated_scores is a time step
+df_ts <- data.frame(
+  time = time,
+  comp1 = rotated_scores[, 1],
+  comp2 = rotated_scores[, 2],
+  comp3 = rotated_scores[, 3]
+  # etc. if you want more
 )
 
-# Build the interactive time series plot.
-p <- plot_ly(data_ts, x = ~Time) %>%
-  add_lines(y = ~Component1, name = "Component 1", line = list(width = 2)) %>%
-  add_lines(y = ~Component2, name = "Component 2", line = list(width = 2)) %>%
-  layout(
-    title = "Interactive Time Series of Rotated Scores",
-    xaxis = list(title = "Time Step"),
-    yaxis = list(title = "Rotated Score")
-  )
+p_left <- ggplot(df_ts, aes(x = time)) +
+  geom_line(aes(y = comp1, color = "Component 1")) +
+  geom_line(aes(y = comp2, color = "Component 2")) +
+  geom_line(aes(y = comp3, color = "Component 3")) +
+  scale_color_manual(values = c("blue", "red", "darkgreen")) +
+  theme_minimal() +
+  labs(x = "Time (index)", y = "Rotated Score", color = "Series",
+       title = "Time Series of Selected Components")
 
-# Display the plot.
-p
+# 5B. Map showing maximum-loading points for these 3 components
+df_nodes_subset <- data.frame(
+  component = 1:3,
+  x = max_coords[1:3, 1],
+  y = max_coords[1:3, 2]
+)
 
 
+# Combine side by side
+plot(p_left)
+ggsave(file.path("C:/Users/marta/OneDrive/Documenti/UNI/Climate change seminar/ERA5", "time_series_plot.png"), p_left, width = 10, height = 6)
 
 
 
